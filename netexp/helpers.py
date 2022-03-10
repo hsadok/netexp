@@ -83,7 +83,7 @@ def watch_command(command, stop_condition=None, keyboard_int=None,
         return not stop_condition()
 
     try:
-        while continue_running():
+        while True:
             time.sleep(0.01)
 
             if command.recv_ready():
@@ -104,6 +104,10 @@ def watch_command(command, stop_condition=None, keyboard_int=None,
 
             if (timeout is not None) and (time.time() > deadline):
                 break
+
+            if not continue_running():
+                break
+
     except KeyboardInterrupt:
         if keyboard_int is not None:
             keyboard_int()
