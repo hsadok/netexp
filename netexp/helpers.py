@@ -29,13 +29,20 @@ class bcolors:
     UNDERLINE = '\033[4m'
 
 
-def remote_command(client, command, pty=False, print_command=False):
+def remote_command(client, command, pty=False, dir=None, source_bashrc=False,
+                   print_command=False):
     transport = client.get_transport()
     session = transport.open_session()
 
     if pty:
         session.setblocking(0)
         session.get_pty()
+
+    if dir is not None:
+        command = f'cd {dir}; {command}'
+
+    if source_bashrc:
+        command = f'source $HOME/.bashrc; {command}'
 
     session.exec_command(command)
 
