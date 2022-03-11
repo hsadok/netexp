@@ -8,6 +8,7 @@ import sys
 import termios
 import time
 import tty
+import warnings
 
 import paramiko
 
@@ -163,7 +164,8 @@ def get_ssh_client(host, nb_retries=0, retry_interval=1):
     return client
 
 
-def run_console_commands(console, commands, timeout=1, console_pattern=None):
+def run_console_commands(console, commands, timeout=1, console_pattern=None,
+                         verbose=False):
     if not isinstance(commands, list):
         commands = [commands]
 
@@ -178,7 +180,8 @@ def run_console_commands(console, commands, timeout=1, console_pattern=None):
         output += watch_command(console,
                                 keyboard_int=lambda: console.send('\x03'),
                                 timeout=timeout, stop_pattern=console_pattern,
-                                max_match_length=console_pattern_len)
+                                max_match_length=console_pattern_len,
+                                stdout=verbose, stderr=verbose)
 
     return output
 
@@ -219,18 +222,20 @@ def posix_shell(chan):
 
 class RemoteIntelFpga:
     def __init__(self, host: str, fpga_id: str, remote_dir: str,
-                 load_bitstream: bool = True):
+                 load_bitstream: bool = True, verbose=False):
         self.host = host
         self.fpga_id = fpga_id
         self._ssh_client = None
         self.jtag_console = None
         self.remote_dir = remote_dir
+        self.verbose = verbose
 
         self.setup(load_bitstream)
 
     def run_jtag_commands(self, commands):
         return run_console_commands(self.jtag_console, commands,
-                                    console_pattern='\r\n% ')
+                                    console_pattern='\r\n% ',
+                                    verbose=self.verbose)
 
     def launch_console(self, max_retries=5):
         retries = 0
@@ -242,11 +247,12 @@ class RemoteIntelFpga:
             app = remote_command(self.ssh_client, cmd, pty=True, dir=cmd_path,
                                  source_bashrc=True)
             watch_command(app, keyboard_int=lambda: app.send('\x03'),
-                          timeout=10)
+                          timeout=10, stdout=self.verbose, stderr=self.verbose)
 
             app.send('source path.tcl\n')
             output = watch_command(app, keyboard_int=lambda: app.send('\x03'),
-                                   timeout=2)
+                                   timeout=2, stdout=self.verbose,
+                                   stderr=self.verbose)
             lines = output.split('\n')
             lines = [
                 ln for ln in lines
@@ -279,7 +285,8 @@ class RemoteIntelFpga:
         while load_bitstream:
             app = remote_command(self.ssh_client, cmd, pty=True, dir=cmd_path,
                                  source_bashrc=True)
-            output = watch_command(app, keyboard_int=lambda: app.send('\x03'))
+            output = watch_command(app, keyboard_int=lambda: app.send('\x03'),
+                                   stdout=self.verbose, stderr=self.verbose)
             status = app.recv_exit_status()
             if status == 0:
                 break
@@ -287,6 +294,8 @@ class RemoteIntelFpga:
             if 'Synchronization failed' in output:
                 raise RuntimeError('Synchronization failed, try power cycling '
                                    'the host')
+
+            warnings.warn('Failed to load bitstream, retrying.')
 
             retries += 1
             if retries >= 5:
