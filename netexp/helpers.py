@@ -83,9 +83,17 @@ def watch_command(command, stop_condition=None, keyboard_int=None,
                 return False
         return not stop_condition()
 
+    stop = False
     try:
-        while True:
+        while not stop:
             time.sleep(0.01)
+
+            # We consume the output one more time after it's done.
+            # This prevents us from missing the last bytes.
+            if (timeout is not None) and (time.time() > deadline):
+                stop = True
+            elif not continue_running():
+                stop = True
 
             if command.recv_ready():
                 data = command.recv(512)
@@ -102,12 +110,6 @@ def watch_command(command, stop_condition=None, keyboard_int=None,
                 if stderr:
                     sys.stderr.write(decoded_data)
                     sys.stderr.flush()
-
-            if (timeout is not None) and (time.time() > deadline):
-                break
-
-            if not continue_running():
-                break
 
     except KeyboardInterrupt:
         if keyboard_int is not None:
