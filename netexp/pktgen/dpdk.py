@@ -2,6 +2,8 @@
 import ipaddress
 import time
 
+from typing import Any, Optional, Iterable
+
 from netexp.pktgen import Pktgen
 from netexp.helpers import get_ssh_client, posix_shell, remote_command, \
     run_console_commands, watch_command
@@ -10,7 +12,7 @@ from netexp.helpers import get_ssh_client, posix_shell, remote_command, \
 class DpdkConfig:
     """Represents DPDK command-line options.
     """
-    def __init__(self, cores: list, mem_channels: int, drivers=None,
+    def __init__(self, cores: Iterable[int], mem_channels: int, drivers=None,
                  mem_alloc=None, mem_ranks=None, xen_dom0=False, syslog=False,
                  socket_mem=None, huge_dir=None, proc_type=None,
                  file_prefix=None, pci_block_list=None, pci_allow_list=None,
@@ -128,11 +130,14 @@ class DpdkPktgen(Pktgen):
         extra_opt:
     """
     def __init__(self, pktgen_server: str, dpdk_config, port_map: str,
-                 port: int = 0, pcap: str = None, config_file: str = None,
-                 log_file: str = None, promiscuous=False, numa_support=False,
-                 extra_opt: str = None, ):
+                 max_throughput: float, port: int = 0,
+                 pcap: Optional[str] = None, config_file: Optional[str] = None,
+                 log_file: Optional[str] = None, promiscuous=False,
+                 numa_support=False, extra_opt: Optional[str] = None):
         self.pktgen_ssh_client = get_ssh_client(pktgen_server)
-        pktgen_options = f'-m {port_map}'
+        pktgen_options = f'-m "{port_map}"'
+        self.max_throughput = max_throughput
+        self.port = port
 
         if pcap is not None:
             pktgen_options += f' -s 0:{pcap}'
@@ -159,22 +164,33 @@ class DpdkPktgen(Pktgen):
         self.pktgen = remote_command(self.pktgen_ssh_client, remote_cmd,
                                      pty=True, print_command=True)
         self.remote_cmd = remote_cmd
+        self.target_pkt_tx = 0
 
-    def wait_ready(self, stdout=True, stderr=True):
+        self.ready = False
+
+    def wait_ready(self, stdout: bool = True, stderr: bool = True) -> None:
         watch_command(self.pktgen, keyboard_int=self.pktgen.close,
                       stop_pattern='Pktgen:/>', stdout=stdout, stderr=stderr)
+        self.ready = True
 
-    def commands(self, cmds, timeout: float = 0.5):
+    def commands(self, cmds, timeout: float = 0.5) -> None:
         run_console_commands(self.pktgen, cmds, timeout=timeout,
                              console_pattern='\r\nPktgen:/> ')
 
-    def config(self, nb_src: int, nb_dest: int, nb_pkts: int, pkt_size: int,
-               init_ip, init_port: int, port: int = 0):
+    def set_params(self, pkt_size: int, nb_src: int, nb_dst: int,
+                   init_ip: Any = None, init_port: int = 0,
+                   port: Optional[int] = None) -> None:
+        init_ip = init_ip or '192.168.0.0'
         max_src_ip = ipaddress.ip_address(init_ip) + nb_src - 1
-        max_dst_ip = ipaddress.ip_address(init_ip) + nb_dest - 1
+        max_dst_ip = ipaddress.ip_address(init_ip) + nb_dst - 1
+
+        if port is None:
+            port = self.port
+
+        if not self.ready:
+            self.wait_ready(stdout=False, stderr=False)
 
         commands = [
-            f'set {port} count {nb_pkts}',
             f'range {port} dst port start {init_port}',
             f'range {port} src ip max {max_src_ip}',
             f'range {port} dst ip max {max_dst_ip}',
@@ -184,13 +200,20 @@ class DpdkPktgen(Pktgen):
         ]
         self.commands(commands)
 
-    def start(self, rate, nb_pkts, port: int = None):
-        if port is None:
-            port = self.port
+    def start(self, throughput: float, nb_pkts: int,
+              port: Optional[int] = None) -> None:
+        port = port or self.port
+
+        if not self.ready:
+            self.wait_ready(stdout=False, stderr=False)
 
         commands = []
         if self.use_pcap:
             commands += [f'enable {port} pcap']
+
+        rate = (throughput / self.max_throughput * 100)
+
+        self.target_pkt_tx = self.get_nb_tx_pkts() + nb_pkts
 
         commands += [
             f'set {port} count {nb_pkts}',
@@ -199,18 +222,33 @@ class DpdkPktgen(Pktgen):
         ]
         self.commands(commands)
 
-    def stop(self, port: int = 0):
-        self.commands(f'stop {port}')
+    def wait_transmission_done(self) -> None:
+        pkts_tx = 0
+        while pkts_tx < self.target_pkt_tx:
+            time.sleep(1)
 
-    def clear(self):
-        self.commands('clr')
+            old_pkt_tx = pkts_tx
+            pkts_tx = self.get_nb_tx_pkts()
 
-    def close(self):
+            if old_pkt_tx == pkts_tx:
+                raise RuntimeError('Pktgen is not making progress')
+
+    def stop(self, port: Optional[int] = None) -> None:
+        self.commands(f'stop {port or self.port}')
+
+    def clear(self) -> None:
+        self.pktgen.send('clr\n')
+        self.wait_ready()
+
+    def clean_stats(self) -> None:
+        return self.clear()
+
+    def close(self) -> None:
         self.pktgen.send('quit\n')
         time.sleep(0.1)
         self.pktgen_ssh_client.close()
 
-    def _get_stats(self, subtype, stat_name, port):
+    def _get_stats(self, subtype: str, stat_name: str, port: int) -> int:
         self.pktgen.send(
             f'\nlua \'print(pktgen.portStats("all", "{subtype}")[{port}].'
             f'{stat_name})\'\n'
@@ -224,23 +262,34 @@ class DpdkPktgen(Pktgen):
 
         return int(lines[-1])
 
-    def get_nb_sent_pkts(self, port: int = 0):
-        return self._get_stats('port', 'opackets', port)
+    def get_pkts_rx_rate(self, port: Optional[int] = None) -> int:
+        return self._get_stats('rate', 'pkts_rx', port or self.port)
 
-    def get_pkts_rx(self, port: int = 0):
-        return self._get_stats('rate', 'pkts_rx', port)
+    def get_pkts_tx_rate(self, port: Optional[int] = None) -> int:
+        return self._get_stats('rate', 'pkts_tx', port or self.port)
 
-    def get_mbits_rx(self, port: int = 0):
-        return self._get_stats('rate', 'mbits_rx', port)
+    def get_mbits_rx(self, port: Optional[int] = None) -> int:
+        return self._get_stats('rate', 'mbits_rx', port or self.port)
 
-    def get_tx_rate(self):
-        # TODO(sadok): Not sure if there is a way to check the TX rate here.
-        return 0
+    def get_mbits_tx(self, port: Optional[int] = None) -> int:
+        return self._get_stats('rate', 'mbits_rx', port or self.port)
 
-    def enter_interactive(self):
+    def get_nb_rx_pkts(self, port: Optional[int] = None) -> int:
+        return self._get_stats('port', 'ipackets', port or self.port)
+
+    def get_nb_tx_pkts(self, port: Optional[int] = None) -> int:
+        return self._get_stats('port', 'opackets', port or self.port)
+
+    def get_rx_throughput(self, port: Optional[int] = None) -> int:
+        return self.get_mbits_rx(self.port) * 1_000_000
+
+    def get_tx_throughput(self, port: Optional[int] = None) -> int:
+        return self.get_mbits_tx(self.port) * 1_000_000
+
+    def enter_interactive(self) -> None:
         posix_shell(self.pktgen)
 
-    def __del__(self):
+    def __del__(self) -> None:
         self.commands('quit')
         del self.pktgen
         self.pktgen_ssh_client.close()

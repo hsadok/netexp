@@ -151,23 +151,22 @@ def get_ssh_client(host, nb_retries=0, retry_interval=1):
 
     trial = 0
     while True:
-        if trial > nb_retries:
-            raise paramiko.ssh_exception.NoValidConnectionsError
         trial += 1
         try:
             client.connect(**cfg)
             break
         except KeyboardInterrupt as e:
             raise e
-        except:
+        except Exception as e:
             time.sleep(retry_interval)
-            continue
+            if trial > nb_retries:
+                raise e
 
     return client
 
 
-def run_console_commands(console, commands, timeout=1, console_pattern=None,
-                         verbose=False):
+def run_console_commands(console, commands, timeout: float = 1,
+                         console_pattern=None, verbose=False):
     if not isinstance(commands, list):
         commands = [commands]
 
@@ -316,7 +315,8 @@ class RemoteIntelFpga:
 
     @ssh_client.deleter
     def ssh_client(self):
-        self._ssh_client.close()
+        if self._ssh_client is not None:
+            self._ssh_client.close()
         del self._ssh_client
         self._ssh_client = None
 
