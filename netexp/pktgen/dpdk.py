@@ -2,7 +2,7 @@
 import ipaddress
 import time
 
-from typing import Any, Optional, Iterable
+from typing import Any, Optional, Iterable, Union
 
 from netexp.pktgen import Pktgen
 from netexp.helpers import get_ssh_client, posix_shell, remote_command, \
@@ -10,15 +10,62 @@ from netexp.helpers import get_ssh_client, posix_shell, remote_command, \
 
 
 class DpdkConfig:
-    """Represents DPDK command-line options.
-    """
-    def __init__(self, cores: Iterable[int], mem_channels: int, drivers=None,
-                 mem_alloc=None, mem_ranks=None, xen_dom0=False, syslog=False,
-                 socket_mem=None, huge_dir=None, proc_type=None,
-                 file_prefix=None, pci_block_list=None, pci_allow_list=None,
-                 vdev=None, vmware_tsc_map=False, base_virtaddr=False,
-                 vfio_intr=None, create_uio_dev=None, extra_opt: str = None):
+    """Represent DPDK command-line options.
 
+    Attributes:
+        cores: List of cores to run on.
+        mem_channels: Number of memory channels to use.
+        drivers: Load external drivers. Can be a single shared object file, or
+          a directory containing multiple driver shared objects.
+        mem_alloc: Amount of memory to preallocate at startup.
+        mem_ranks: Set number of memory ranks.
+        xen_dom0: Support application running on Xen Domain0 without hugetlbfs.
+        syslog: Set syslog facility.
+        socket_mem: Preallocate specified amounts of memory per socket.
+        huge_dir: Use specified hugetlbfs directory instead of autodetected
+          ones. This can be a sub-directory within a hugetlbfs mountpoint.
+        proc_type: Set the type of the current process. (`primary`,
+          `secondary`, or `auto`)
+        file_prefix: Use a different shared data file prefix for a DPDK
+          process. This option allows running multiple independent DPDK
+          primary/secondary processes under different prefixes.
+        pci_block_list: Skip probing specified PCI device to prevent EAL from
+          using it.
+        pci_allow_list: Add PCI devices in to the list of devices to probe.
+        vdev: Add a virtual device using the format:
+          `<driver><id>[,key=val, ...]`.
+        vmware_tsc_map: Use VMware TSC map instead of native RDTSC.
+        base_virtaddr: Attempt to use a different starting address for all
+          memory maps of the primary DPDK process. This can be helpful if
+          secondary processes cannot start due to conflicts in address map.
+        vfio_intr: Use specified interrupt mode for devices bound to VFIO
+          kernel driver. (`legacy`, `msi`, or `msix`)
+        create_uio_dev: Create `/dev/uioX` files for devices bound to igb_uio
+         kernel driver (usually done by the igb_uio driver itself).
+        extra_opt: Extra command-line options.
+
+    Examples:
+        Obtaining the DPDK configuration in command-line option format:
+
+        >>> dpdk_config = DpdkConfig([0, 2], 4, pci_allow_list='05:00.0')
+        >>> str(dpdk_config)
+        '-l 0,2 -n 4 -a 05:00.0'
+    """
+    def __init__(self, cores: Iterable[int], mem_channels: int,
+                 drivers: Optional[Iterable[str]] = None,
+                 mem_alloc: Optional[int] = None,
+                 mem_ranks: Optional[int] = None, xen_dom0: bool = False,
+                 syslog: bool = False,
+                 socket_mem: Optional[Iterable[int]] = None,
+                 huge_dir: Optional[str] = None,
+                 proc_type: Optional[str] = None,
+                 file_prefix: Optional[str] = None,
+                 pci_block_list: Optional[Iterable[str]] = None,
+                 pci_allow_list: Optional[Iterable[str]] = None,
+                 vdev: Optional[str] = None, vmware_tsc_map: bool = False,
+                 base_virtaddr: Optional[str] = None,
+                 vfio_intr: Optional[str] = None, create_uio_dev: bool = False,
+                 extra_opt: Optional[str] = None) -> None:
         self.cores = cores
         self.mem_channels = mem_channels
         self.drivers = drivers
@@ -69,7 +116,8 @@ class DpdkConfig:
             opts += ' --syslog'
 
         if self.socket_mem is not None:
-            opts += f' --socket-mem {self.socket_mem}'
+            opt = ','.join(str(sm) for sm in self.socket_mem)
+            opts += f' --socket-mem {opt}'
 
         if self.huge_dir is not None:
             opts += f' --huge-dir {self.huge_dir}'
@@ -94,7 +142,7 @@ class DpdkConfig:
         if self.vmware_tsc_map:
             opts += ' --vmware-tsc-map'
 
-        if self.base_virtaddr:
+        if self.base_virtaddr is not None:
             opts += f' --base-virt-addr {self.base_virtaddr}'
 
         if self.vfio_intr is not None:
@@ -113,27 +161,28 @@ class DpdkPktgen(Pktgen):
     """Wrapper for DPDK pktgen.
 
     It assumes that DPDK pktgen can be executed remotely by running `pktgen`.
-    It also requires that DPDK pktgen be built with Lua support, e.g.,
-    `meson build -Denable_lua=true`
+    It also requires that DPDK pktgen be built with Lua support (e.g.,
+    `meson build -Denable_lua=true`).
 
     Attributes:
-        pktgen_server: The remote to run pktgen on.
-        dpdk_config: CLI config to pass to DPDK. Can use either `DpdkConfig` or
-          `str`.
-        port_map:
-        port:
-        pcap:
-        config_file:
-        log_file:
-        promiscuous:
-        numa_support:
-        extra_opt:
+        pktgen_server: The remote host to run DPDK Pktgen on.
+        dpdk_config: CLI config to pass to DPDK.
+        port_map: Port map using DPDK Pktgen port map syntax.
+        max_throughput: Maximum throughput supported by the NIC.
+        port: Default port to use, only relevant when using multiple interfaces.
+        pcap: Path to pcap file.
+        config_file: DPDK Pktgen configuration file.
+        log_file: Log file.
+        promiscuous: Enable promiscuous mode (accept all packets that arrive at
+          the interface).
+        numa_support: Enable NUMA support.
+        extra_opt: Extra DPDK pktgen command-line options.
     """
-    def __init__(self, pktgen_server: str, dpdk_config, port_map: str,
-                 max_throughput: float, port: int = 0,
+    def __init__(self, pktgen_server: str, dpdk_config: Union[str, DpdkConfig],
+                 port_map: str, max_throughput: float, port: int = 0,
                  pcap: Optional[str] = None, config_file: Optional[str] = None,
                  log_file: Optional[str] = None, promiscuous=False,
-                 numa_support=False, extra_opt: Optional[str] = None):
+                 numa_support=False, extra_opt: Optional[str] = None) -> None:
         self.pktgen_ssh_client = get_ssh_client(pktgen_server)
         pktgen_options = f'-m "{port_map}"'
         self.max_throughput = max_throughput
