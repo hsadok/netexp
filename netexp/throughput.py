@@ -53,7 +53,7 @@ def zero_loss_throughput(pktgen: Pktgen, mean_pkt_size: int,
             tpt_upper = current_throughput
         elif nb_rx_pkts == nb_pkts:
             tpt_lower = current_throughput
-        else:  # pktgen.nb_rx_pkts > nb_pkts
+        else:  # nb_rx_pkts > nb_pkts
             raise RuntimeError(
                 'Received more packets than sent. Measurement is unreliable.'
             )
