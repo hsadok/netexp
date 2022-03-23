@@ -324,3 +324,85 @@ class RemoteIntelFpga:
         if self.jtag_console is not None:
             self.jtag_console.close()
         del self.ssh_client
+
+
+def get_host_available_frequencies(ssh_client: paramiko.SSHClient,
+                                   core: int) -> list[int]:
+    cmd = remote_command(
+        ssh_client,
+        f'sudo cat /sys/devices/system/cpu/cpu{core}/cpufreq/'
+        f'scaling_available_frequencies',
+        pty=True
+    )
+    out = watch_command(cmd, stdout=True, stderr=True)
+    status = cmd.recv_exit_status()
+    if status != 0:
+        raise RuntimeError('Could not probe available frequencies')
+
+    print(out)
+    frequencies = []
+    for f in out.split(' '):
+        try:
+            f = int(f.strip())
+            frequencies.append(f)
+        except ValueError:
+            pass
+
+    return frequencies
+
+
+def set_remote_host_clock(ssh_client: paramiko.SSHClient, clock: int,
+                          cores: list[int]) -> None:
+    """Set clock frequency for a remote host.
+
+    Args:
+        ssh_client: SSH connection to the remote host.
+        clock: CPU frequency to be set (in kHz). If `0` set frequency to
+          maximum supported by the core.
+        cores: List of cores to set the frequency to.
+    """
+    # Arch has good docs about this:
+    #   https://wiki.archlinux.org/title/CPU_frequency_scalin
+    def raw_set_core_freq(freq_type: str, core: int, freq: int):
+        cmd = remote_command(
+            ssh_client,
+            f'echo {freq} | sudo tee /sys/devices/system/cpu/cpu{core}/'
+            f'cpufreq/scaling_{freq_type}_freq',
+            pty=True
+        )
+        watch_command(cmd, stdout=False, stderr=False)
+        status = cmd.recv_exit_status()
+        if status != 0:
+            raise RuntimeError(f'Could not set {freq_type} frequency')
+
+    for core in cores:
+        available_freqs = get_host_available_frequencies(ssh_client, core)
+
+        if clock == 0:
+            clock = available_freqs[0]  # Set clock to maximum.
+
+        if clock not in available_freqs:
+            raise RuntimeError(f'Clock "{clock}" not supported by CPU.')
+
+        cmd = remote_command(
+            ssh_client,
+            f'sudo cat /sys/devices/system/cpu/cpu{core}/cpufreq/'
+            f'cpuinfo_cur_freq',
+            pty=True
+        )
+        out = watch_command(cmd, stdout=False, stderr=False)
+        status = cmd.recv_exit_status()
+        if status != 0:
+            raise RuntimeError('Could not retrieve current frequency')
+
+        cur_freq = int(out)
+
+        if clock == cur_freq:
+            continue
+
+        if clock < cur_freq:
+            raw_set_core_freq('min', core, clock)
+            raw_set_core_freq('max', core, clock)
+        else:
+            raw_set_core_freq('max', core, clock)
+            raw_set_core_freq('min', core, clock)
