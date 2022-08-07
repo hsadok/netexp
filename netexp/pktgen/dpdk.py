@@ -169,7 +169,7 @@ class DpdkPktgen(Pktgen):
         dpdk_config: CLI config to pass to DPDK.
         port_map: Port map using DPDK Pktgen port map syntax.
         max_throughput: Maximum throughput supported by the NIC.
-        port: Default port to use, only relevant when using multiple interfaces.
+        port: Default port to use, only relevant with multiple interfaces.
         pcap: Path to pcap file.
         config_file: DPDK Pktgen configuration file.
         log_file: Log file.
@@ -181,8 +181,9 @@ class DpdkPktgen(Pktgen):
     def __init__(self, pktgen_server: str, dpdk_config: Union[str, DpdkConfig],
                  port_map: str, max_throughput: float, port: int = 0,
                  pcap: Optional[str] = None, config_file: Optional[str] = None,
-                 log_file: Optional[str] = None, promiscuous=False,
-                 numa_support=False, extra_opt: Optional[str] = None) -> None:
+                 log_file: Optional[str] = None, promiscuous: bool = False,
+                 numa_support: bool = False,
+                 extra_opt: Optional[str] = None) -> None:
         self.pktgen_ssh_client = get_ssh_client(pktgen_server)
         pktgen_options = f'-m "{port_map}"'
         self.max_throughput = max_throughput
