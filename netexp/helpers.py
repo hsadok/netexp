@@ -365,7 +365,7 @@ def set_remote_host_clock(ssh_client: paramiko.SSHClient, clock: int,
         cores: List of cores to set the frequency to.
     """
     # Arch has good docs about this:
-    #   https://wiki.archlinux.org/title/CPU_frequency_scalin
+    #   https://wiki.archlinux.org/title/CPU_frequency_scaling
     def raw_set_core_freq(freq_type: str, core: int, freq: int):
         cmd = remote_command(
             ssh_client,
