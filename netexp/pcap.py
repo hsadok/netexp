@@ -2,6 +2,8 @@
 from netexp.helpers import remote_command, watch_command
 
 
+# TODO(sadok): Provide this as a method for pktgen. This can allow it to
+# flexibly get the packet size if a pcap is loaded.
 def mean_pkt_size_remote_pcap(ssh_client, pcap_path) -> float:
     capinfos_cmd = remote_command(
         ssh_client, f'capinfos -z {pcap_path}', pty=True
