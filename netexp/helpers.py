@@ -13,6 +13,7 @@ import warnings
 import paramiko
 
 from pathlib import Path
+from typing import TextIO, Union
 
 
 # from here: https://stackoverflow.com/a/287944/2027390
@@ -66,13 +67,20 @@ def remove_remote_file(host, remote_path):
 
 
 def watch_command(command, stop_condition=None, keyboard_int=None,
-                  timeout=None, stdout=True, stderr=True, stop_pattern=None,
+                  timeout=None, stdout: Union[bool, TextIO] = True,
+                  stderr: Union[bool, TextIO] = True, stop_pattern=None,
                   max_match_length=1024):
     if stop_condition is None:
         stop_condition = command.exit_status_ready
 
     if timeout is not None:
         deadline = time.time() + timeout
+
+    if stdout is True:
+        stdout = sys.stdout
+
+    if stderr is True:
+        stderr = sys.stderr
 
     output = ''
 
@@ -100,16 +108,16 @@ def watch_command(command, stop_condition=None, keyboard_int=None,
                 decoded_data = data.decode('utf-8')
                 output += decoded_data
                 if stdout:
-                    sys.stdout.write(decoded_data)
-                    sys.stdout.flush()
+                    stdout.write(decoded_data)
+                    stdout.flush()
 
             if command.recv_stderr_ready():
                 data = command.recv_stderr(512)
                 decoded_data = data.decode('utf-8')
                 output += decoded_data
                 if stderr:
-                    sys.stderr.write(decoded_data)
-                    sys.stderr.flush()
+                    stderr.write(decoded_data)
+                    stderr.flush()
 
     except KeyboardInterrupt:
         if keyboard_int is not None:
@@ -166,7 +174,8 @@ def get_ssh_client(host, nb_retries=0, retry_interval=1):
 
 
 def run_console_commands(console, commands, timeout: float = 1,
-                         console_pattern=None, verbose=False):
+                         console_pattern=None,
+                         log_file: Union[bool, TextIO] = False):
     if not isinstance(commands, list):
         commands = [commands]
 
@@ -182,7 +191,7 @@ def run_console_commands(console, commands, timeout: float = 1,
                                 keyboard_int=lambda: console.send('\x03'),
                                 timeout=timeout, stop_pattern=console_pattern,
                                 max_match_length=console_pattern_len,
-                                stdout=verbose, stderr=verbose)
+                                stdout=log_file, stderr=log_file)
 
     return output
 
@@ -224,21 +233,21 @@ def posix_shell(chan):
 class RemoteIntelFpga:
     def __init__(self, host: str, fpga_id: str, run_console_cmd: str,
                  load_bitstream_cmd: str, load_bitstream: bool = True,
-                 verbose=False):
+                 log_file: Union[bool, TextIO] = False):
         self.host = host
         self.fpga_id = fpga_id
         self._ssh_client = None
         self.jtag_console = None
         self.run_console_cmd = run_console_cmd
         self.load_bitstream_cmd = load_bitstream_cmd
-        self.verbose = verbose
+        self.log_file = log_file
 
         self.setup(load_bitstream)
 
     def run_jtag_commands(self, commands):
         return run_console_commands(self.jtag_console, commands,
                                     console_pattern='\r\n% ',
-                                    verbose=self.verbose)
+                                    log_file=self.log_file)
 
     def launch_console(self, max_retries=5):
         retries = 0
@@ -250,12 +259,13 @@ class RemoteIntelFpga:
             app = remote_command(self.ssh_client, cmd, pty=True, dir=cmd_path,
                                  source_bashrc=True)
             watch_command(app, keyboard_int=lambda: app.send('\x03'),
-                          timeout=10, stdout=self.verbose, stderr=self.verbose)
+                          timeout=10, stdout=self.log_file,
+                          stderr=self.log_file)
 
             app.send('source path.tcl\n')
             output = watch_command(app, keyboard_int=lambda: app.send('\x03'),
-                                   timeout=2, stdout=self.verbose,
-                                   stderr=self.verbose)
+                                   timeout=2, stdout=self.log_file,
+                                   stderr=self.log_file)
             lines = output.split('\n')
             lines = [
                 ln for ln in lines
@@ -289,7 +299,7 @@ class RemoteIntelFpga:
             app = remote_command(self.ssh_client, cmd, pty=True, dir=cmd_path,
                                  source_bashrc=True)
             output = watch_command(app, keyboard_int=lambda: app.send('\x03'),
-                                   stdout=self.verbose, stderr=self.verbose)
+                                   stdout=self.log_file, stderr=self.log_file)
             status = app.recv_exit_status()
             if status == 0:
                 break
