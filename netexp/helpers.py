@@ -14,9 +14,6 @@ import paramiko
 
 from pathlib import Path
 
-LOAD_BITSTREAM_CMD = 'hardware_test/load_bitstream.sh'
-RUN_CONSOLE_CMD = 'hardware_test/run_console.sh'
-
 
 # from here: https://stackoverflow.com/a/287944/2027390
 class bcolors:
@@ -225,13 +222,15 @@ def posix_shell(chan):
 
 
 class RemoteIntelFpga:
-    def __init__(self, host: str, fpga_id: str, remote_dir: str,
-                 load_bitstream: bool = True, verbose=False):
+    def __init__(self, host: str, fpga_id: str, run_console_cmd: str,
+                 load_bitstream_cmd: str, load_bitstream: bool = True,
+                 verbose=False):
         self.host = host
         self.fpga_id = fpga_id
         self._ssh_client = None
         self.jtag_console = None
-        self.remote_dir = remote_dir
+        self.run_console_cmd = run_console_cmd
+        self.load_bitstream_cmd = load_bitstream_cmd
         self.verbose = verbose
 
         self.setup(load_bitstream)
@@ -243,8 +242,8 @@ class RemoteIntelFpga:
 
     def launch_console(self, max_retries=5):
         retries = 0
-        cmd = Path(RUN_CONSOLE_CMD)
-        cmd_path = Path(self.remote_dir) / cmd.parent
+        cmd = Path(self.run_console_cmd)
+        cmd_path = cmd.parent
         cmd = f'./{cmd.name} {self.fpga_id}'
 
         while True:
@@ -282,8 +281,8 @@ class RemoteIntelFpga:
 
     def setup(self, load_bitstream):
         retries = 0
-        cmd = Path(LOAD_BITSTREAM_CMD)
-        cmd_path = Path(self.remote_dir) / cmd.parent
+        cmd = Path(self.load_bitstream_cmd)
+        cmd_path = cmd.parent
         cmd = f'./{cmd.name} {self.fpga_id}'
 
         while load_bitstream:
