@@ -54,15 +54,18 @@ def remote_command(client, command, pty=False, dir=None, source_bashrc=False,
 
 
 def upload_file(host, local_path, remote_path):
-    subprocess.run(['scp', '-r', local_path, f'{host}:{remote_path}'])
+    cp = subprocess.run(['scp', '-r', local_path, f'{host}:{remote_path}'])
+    cp.check_returncode()
 
 
 def download_file(host, remote_path, local_path):
-    subprocess.run(['scp', '-r', f'{host}:{remote_path}', local_path])
+    cp = subprocess.run(['scp', '-r', f'{host}:{remote_path}', local_path])
+    cp.check_returncode()
 
 
 def remove_remote_file(host, remote_path):
-    subprocess.run(['ssh', host, 'rm', remote_path])
+    cp = subprocess.run(['ssh', host, 'rm', remote_path])
+    cp.check_returncode()
 
 
 def watch_command(command, stop_condition=None, keyboard_int=None,
