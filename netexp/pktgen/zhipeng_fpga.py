@@ -14,6 +14,9 @@ INPUT_GEN_CMD = 'hardware_test/hwtest/input_gen.py'
 PCAP_GEN_CMD = 'frontend/generate_synthetic_trace.py'
 PCAP_DEST = Path('hardware_test/hwtest')
 
+LOAD_BITSTREAM_CMD = 'hardware_test/load_bitstream.sh'
+RUN_CONSOLE_CMD = 'hardware_test/run_console.sh'
+
 MAX_NB_PCAP_FLITS = 16384
 
 
@@ -24,7 +27,12 @@ class FpgaPktgen(Pktgen):
         self._rx_window = 0
         self._tx_window = 0
         self._nb_pcap_iters = 0  # 0 means forever
-        self.fpga = RemoteIntelFpga(server, fpga_id, remote_dir,
+
+        load_bitstream_cmd = f"{remote_dir}/{LOAD_BITSTREAM_CMD}"
+        run_console_cmd = f"{remote_dir}/{RUN_CONSOLE_CMD}"
+
+        self.fpga = RemoteIntelFpga(server, fpga_id, run_console_cmd,
+                                    load_bitstream_cmd,
                                     load_bitstream=load_bitstream)
 
         # make sure it is not running and registers are clear
