@@ -13,7 +13,7 @@ import warnings
 import paramiko
 
 from pathlib import Path
-from typing import TextIO, Union
+from typing import TextIO, Union, Optional
 
 
 # from here: https://stackoverflow.com/a/287944/2027390
@@ -28,9 +28,148 @@ class bcolors:
     UNDERLINE = '\033[4m'
 
 
-def remote_command(client, command, pty=False, dir=None, source_bashrc=False,
-                   print_command=False):
+class LocalCommand:
+    def __init__(self) -> None:
+        pass
+
+    def __del__(self):
+        pass
+
+    def send(self, data):
+        pass
+
+    def recv(self, size):
+        pass
+
+    def watch(self, *args, **kwargs) -> str:
+        pass
+
+    def recv_exit_status(self):
+        pass
+
+    def settimeout(self, timeout):
+        pass
+
+    def close(self):
+        pass
+
+    @property
+    def pipe(self) -> subprocess.PIPE:
+        pass
+
+    def run_console_commands(self, commands: Union[str, list[str]],
+                             timeout: float = 1.0,
+                             console_pattern: Optional[str] = None,
+                             log_file: Union[bool, TextIO] = False) -> str:
+        pass
+
+
+class RemoteCommand:
+    def __init__(self, ssh_client: paramiko.SSHClient, *args,
+                 **kwargs) -> None:
+        self.ssh_client = ssh_client
+        self.cmd = remote_command(ssh_client, *args, **kwargs)
+
+    def send(self, data):
+        self.cmd.send(data)
+
+    def recv(self, size):
+        return self.cmd.recv(size)
+
+    def watch(self, *args, **kwargs) -> str:
+        return watch_command(self.cmd, *args, **kwargs)
+
+    def recv_exit_status(self):
+        return self.cmd.recv_exit_status()
+
+    def close(self):
+        self.cmd.close()
+
+    @property
+    def pipe(self) -> paramiko.Channel:
+        return self.cmd
+
+    def run_console_commands(self, commands: Union[str, list[str]],
+                             timeout: float = 1.0,
+                             console_pattern: Optional[str] = None,
+                             log_file: Union[bool, TextIO] = False) -> str:
+        if not isinstance(commands, list):
+            commands = [commands]
+
+        if console_pattern is not None:
+            console_pattern_len = len(console_pattern)
+        else:
+            console_pattern_len = None
+
+        output = ''
+        for cmd in commands:
+            self.send(cmd + '\n')
+            output += self.watch(keyboard_int=lambda: self.send('\x03'),
+                                 timeout=timeout, stop_pattern=console_pattern,
+                                 max_match_length=console_pattern_len,
+                                 stdout=log_file, stderr=log_file)
+
+        return output
+
+
+class LocalHost:
+    def __init__(self):
+        pass
+
+    def run_command(self,  *args, **kwargs) -> LocalCommand:
+        return LocalCommand()
+
+
+class RemoteHost:
+    def __init__(self, host: str, nb_retries: int = 0,
+                 retry_interval: int = 1) -> None:
+        self.host = host
+        self.nb_retries = nb_retries
+        self.retry_interval = retry_interval
+
+        self._ssh_client = None
+
+    @property
+    def ssh_client(self):
+        if self._ssh_client is None:
+            self._ssh_client = get_ssh_client(self.host)
+        return self._ssh_client
+
+    @ssh_client.deleter
+    def ssh_client(self):
+        if self._ssh_client is not None:
+            self._ssh_client.close()
+            del self._ssh_client
+        self._ssh_client = None
+
+    def __del__(self):
+        del self.ssh_client
+
+    def run_command(self,  *args, **kwargs) -> RemoteCommand:
+        return RemoteCommand(self.ssh_client, *args, **kwargs)
+
+
+class LocalClient:
+    """A client that runs commands locally."""
+    def __init__(self):
+        pass
+
+    def get_transport(self):
+        return None
+
+    def close(self):
+        pass
+
+
+def remote_command(client: paramiko.SSHClient, command: str,
+                   pty: bool = False, dir: Optional[str] = None,
+                   source_bashrc: bool = False,
+                   print_command: bool = False) -> paramiko.Channel:
     transport = client.get_transport()
+
+    if transport is None:
+        raise RuntimeError('Failed to get transport from client.')
+
     session = transport.open_session()
 
     if pty:
@@ -69,7 +208,7 @@ def remove_remote_file(host, remote_path):
 def watch_command(command, stop_condition=None, keyboard_int=None,
                   timeout=None, stdout: Union[bool, TextIO] = True,
                   stderr: Union[bool, TextIO] = True, stop_pattern=None,
-                  max_match_length=1024):
+                  max_match_length: Optional[int] = None) -> str:
     if stop_condition is None:
         stop_condition = command.exit_status_ready
 
@@ -81,6 +220,9 @@ def watch_command(command, stop_condition=None, keyboard_int=None,
 
     if stderr is True:
         stderr = sys.stderr
+
+    if max_match_length is None:
+        max_match_length = 1024
 
     output = ''
 
@@ -127,7 +269,8 @@ def watch_command(command, stop_condition=None, keyboard_int=None,
     return output
 
 
-def get_ssh_client(host, nb_retries=0, retry_interval=1):
+def get_ssh_client(host, nb_retries: int = 0,
+                   retry_interval: float = 1) -> paramiko.SSHClient:
     # adapted from https://gist.github.com/acdha/6064215
     client = paramiko.SSHClient()
     client._policy = paramiko.WarningPolicy()
@@ -173,8 +316,9 @@ def get_ssh_client(host, nb_retries=0, retry_interval=1):
     return client
 
 
-def run_console_commands(console, commands, timeout: float = 1,
-                         console_pattern=None,
+def run_console_commands(console, commands: Union[str, list[str]],
+                         timeout: float = 1.0,
+                         console_pattern: Optional[str] = None,
                          log_file: Union[bool, TextIO] = False):
     if not isinstance(commands, list):
         commands = [commands]
@@ -231,12 +375,17 @@ def posix_shell(chan):
 
 
 class RemoteIntelFpga:
-    def __init__(self, host: str, fpga_id: str, run_console_cmd: str,
-                 load_bitstream_cmd: str, load_bitstream: bool = True,
+    def __init__(self, host_name: Optional[str], fpga_id: str,
+                 run_console_cmd: str, load_bitstream_cmd: str,
+                 load_bitstream: bool = True,
                  log_file: Union[bool, TextIO] = False):
-        self.host = host
+        if host_name in ['localhost', '127.0.0.1']:
+            host_name = None
+
+        self.host_name = host_name
         self.fpga_id = fpga_id
-        self._ssh_client = None
+        # self._ssh_client = None
+        self._host = None
         self.jtag_console = None
         self.run_console_cmd = run_console_cmd
         self.load_bitstream_cmd = load_bitstream_cmd
@@ -244,10 +393,13 @@ class RemoteIntelFpga:
 
         self.setup(load_bitstream)
 
-    def run_jtag_commands(self, commands):
-        return run_console_commands(self.jtag_console, commands,
-                                    console_pattern='\r\n% ',
-                                    log_file=self.log_file)
+    def run_jtag_commands(self, commands) -> str:
+        if self.jtag_console is None:
+            raise RuntimeError('JTAG console not started')
+
+        return self.jtag_console.run_console_commands(commands,
+                                                      console_pattern='\r\n% ',
+                                                      log_file=self.log_file)
 
     def launch_console(self, max_retries=5):
         retries = 0
@@ -256,16 +408,16 @@ class RemoteIntelFpga:
         cmd = f'./{cmd.name} {self.fpga_id}'
 
         while True:
-            app = remote_command(self.ssh_client, cmd, pty=True, dir=cmd_path,
-                                 source_bashrc=True)
-            watch_command(app, keyboard_int=lambda: app.send('\x03'),
-                          timeout=10, stdout=self.log_file,
-                          stderr=self.log_file)
+            app = self.host.run_command(cmd, pty=True, dir=cmd_path,
+                                        source_bashrc=True)
+            app.watch(keyboard_int=lambda: app.send('\x03'), timeout=10,
+                      stdout=self.log_file, stderr=self.log_file)
 
             app.send('source path.tcl\n')
-            output = watch_command(app, keyboard_int=lambda: app.send('\x03'),
-                                   timeout=2, stdout=self.log_file,
-                                   stderr=self.log_file)
+            output = app.watch(keyboard_int=lambda: app.send('\x03'),
+                               timeout=2, stdout=self.log_file,
+                               stderr=self.log_file)
+
             lines = output.split('\n')
             lines = [
                 ln for ln in lines
@@ -296,10 +448,11 @@ class RemoteIntelFpga:
         cmd = f'./{cmd.name} {self.fpga_id}'
 
         while load_bitstream:
-            app = remote_command(self.ssh_client, cmd, pty=True, dir=cmd_path,
-                                 source_bashrc=True)
-            output = watch_command(app, keyboard_int=lambda: app.send('\x03'),
-                                   stdout=self.log_file, stderr=self.log_file)
+            app = self.host.run_command(cmd, pty=True, dir=cmd_path,
+                                        source_bashrc=True)
+            output = app.watch(keyboard_int=lambda: app.send('\x03'),
+                               stdout=self.log_file, stderr=self.log_file)
+
             status = app.recv_exit_status()
             if status == 0:
                 break
@@ -317,25 +470,28 @@ class RemoteIntelFpga:
         self.launch_console()
 
     def interactive_shell(self):
-        posix_shell(self.jtag_console)
+        posix_shell(self.jtag_console.pipe)
 
     @property
-    def ssh_client(self):
-        if self._ssh_client is None:
-            self._ssh_client = get_ssh_client(self.host)
-        return self._ssh_client
+    def host(self):
+        if self._host is None:
+            if self.host_name is None:
+                self._host = LocalHost()
+            else:
+                self._host = RemoteHost(self.host_name)
+        return self._host
 
-    @ssh_client.deleter
-    def ssh_client(self):
-        if self._ssh_client is not None:
-            self._ssh_client.close()
-        del self._ssh_client
-        self._ssh_client = None
+    @host.deleter
+    def host(self):
+        if self._host is None:
+            return
+        del self._host
+        self._host = None
 
     def __del__(self):
         if self.jtag_console is not None:
             self.jtag_console.close()
-        del self.ssh_client
+        del self.host
 
 
 def get_host_available_frequencies(ssh_client: paramiko.SSHClient,
