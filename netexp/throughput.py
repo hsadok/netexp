@@ -1,11 +1,13 @@
-
 from netexp.pktgen import Pktgen
 
 
-def zero_loss_throughput(pktgen: Pktgen, mean_pkt_size: int,
-                         max_throughput: int = 100_000_000_000,
-                         precision: int = 1_000_000_000,
-                         target_duration: int = 5) -> int:
+def zero_loss_throughput(
+    pktgen: Pktgen,
+    mean_pkt_size: int,
+    max_throughput: int = 100_000_000_000,
+    precision: int = 1_000_000_000,
+    target_duration: int = 5,
+) -> int:
     """Find zero-loss throughput using a binary search.
 
     This assumes that the DUT is connected to the packet generator and ready to
@@ -26,6 +28,7 @@ def zero_loss_throughput(pktgen: Pktgen, mean_pkt_size: int,
     Returns:
         The zero loss throughput found (in bps).
     """
+
     def get_nb_pkts_for_throughput(throughput):
         pps = throughput / ((mean_pkt_size + 20) * 8)
         return int(pps * target_duration)
@@ -41,7 +44,7 @@ def zero_loss_throughput(pktgen: Pktgen, mean_pkt_size: int,
     while (tpt_upper - tpt_lower) > precision:
         nb_pkts = get_nb_pkts_for_throughput(current_throughput)
 
-        print(f'Trying {current_throughput // 1e6} Mbps with {nb_pkts} pkts.')
+        print(f"Trying {current_throughput // 1e6} Mbps with {nb_pkts} pkts.")
 
         pktgen.clean_stats()
         pktgen.start(current_throughput, nb_pkts)
@@ -55,7 +58,7 @@ def zero_loss_throughput(pktgen: Pktgen, mean_pkt_size: int,
             tpt_lower = current_throughput
         else:  # nb_rx_pkts > nb_pkts
             raise RuntimeError(
-                'Received more packets than sent. Measurement is unreliable.'
+                "Received more packets than sent. Measurement is unreliable."
             )
 
         current_throughput = (tpt_upper + tpt_lower) // 2

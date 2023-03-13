@@ -1,5 +1,4 @@
-
 try:
-    from enso.ensogen import *
+    from enso.ensogen import EnsoGen
 except ModuleNotFoundError:
-    raise RuntimeError('enso-nic not installed.')
+    raise RuntimeError("enso-nic not installed.")
