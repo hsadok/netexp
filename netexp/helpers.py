@@ -12,7 +12,7 @@ import warnings
 import paramiko
 
 from pathlib import Path
-from typing import TextIO, Union, Optional
+from typing import TextIO, Union, Optional, Callable
 
 
 # from here: https://stackoverflow.com/a/287944/2027390
@@ -28,69 +28,153 @@ class bcolors:
 
 
 class LocalCommand:
-    def __init__(self) -> None:
-        pass
-
-    def __del__(self):
-        pass
-
-    def send(self, data):
-        pass
-
-    def recv(self, size):
-        pass
-
-    def watch(self, *args, **kwargs) -> str:
-        pass
-
-    def recv_exit_status(self):
-        pass
-
-    def settimeout(self, timeout):
-        pass
-
-    def close(self):
-        pass
-
-    @property
-    def pipe(self) -> subprocess.PIPE:
-        pass
-
-    def run_console_commands(
-        self,
-        commands: Union[str, list[str]],
-        timeout: float = 1.0,
-        console_pattern: Optional[str] = None,
-        log_file: Union[bool, TextIO] = False,
-    ) -> str:
-        pass
-
-
-class RemoteCommand:
     def __init__(
-        self, ssh_client: paramiko.SSHClient, *args, **kwargs
+        self,
+        command: str,
+        pty: bool = False,
+        dir: Optional[str] = None,
+        source_bashrc: bool = False,
+        print_command: bool = False,
     ) -> None:
-        self.ssh_client = ssh_client
-        self.cmd = remote_command(ssh_client, *args, **kwargs)
+        if dir is not None:
+            command = f"cd {dir}; {command}"
 
-    def send(self, data):
-        self.cmd.send(data)
+        if source_bashrc:
+            command = f"source $HOME/.bashrc; {command}"
 
-    def recv(self, size):
-        return self.cmd.recv(size)
+        self.proc_ = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            shell=True,
+            # text=True,
+        )
 
-    def watch(self, *args, **kwargs) -> str:
-        return watch_command(self.cmd, *args, **kwargs)
+        if print_command:
+            print(f"command: {command}")
 
-    def recv_exit_status(self):
-        return self.cmd.recv_exit_status()
+    def send(self, data: Union[str, bytes]) -> None:
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        self.stdin.write(data)
+        self.stdin.flush()
 
-    def close(self):
-        self.cmd.close()
+    def recv(self, size) -> str:
+        original_proc_blocking = os.get_blocking(self.stdout.fileno())
 
-    @property
-    def pipe(self) -> paramiko.Channel:
-        return self.cmd
+        try:
+            os.set_blocking(self.stdout.fileno(), False)
+            data = self.stdout.read(size)
+        finally:
+            os.set_blocking(self.stdout.fileno(), original_proc_blocking)
+
+        if data is None:
+            return ""
+
+        return data.decode("utf-8")
+
+    def recv_stderr(self, size) -> str:
+        original_proc_blocking = os.get_blocking(self.stderr.fileno())
+
+        try:
+            os.set_blocking(self.stderr.fileno(), False)
+            data = self.stderr.read(size)
+        finally:
+            os.set_blocking(self.stderr.fileno(), original_proc_blocking)
+
+        return data.decode("utf-8")
+
+    def watch(
+        self,
+        stop_condition: Optional[Callable[[], bool]] = None,
+        keyboard_int: Optional[Callable[[], None]] = None,
+        timeout: Optional[float] = None,
+        stdout: Union[bool, TextIO] = True,
+        stderr: Union[bool, TextIO] = True,
+        stop_pattern: Optional[str] = None,
+        max_match_length: Optional[int] = None,
+    ) -> str:
+        def exit_status_ready() -> bool:
+            return self.proc_.poll() is not None
+
+        if stop_condition is None:
+            stop_condition = exit_status_ready
+
+        if timeout is None:
+            deadline = None
+        else:
+            deadline = time.time() + timeout
+
+        if stdout is True:
+            stdout = sys.stdout
+
+        if stderr is True:
+            stderr = sys.stderr
+
+        if max_match_length is None:
+            max_match_length = 1024
+
+        output = ""
+
+        def continue_running():
+            if (deadline is not None) and (time.time() > deadline):
+                return False
+
+            if stop_pattern is not None:
+                search_len = min(len(output), max_match_length)
+                if re.search(stop_pattern, output[-search_len:]):
+                    return False
+
+            return not stop_condition()
+
+        keep_going = True
+
+        original_proc_blocking = os.get_blocking(self.stdout.fileno())
+
+        try:
+            os.set_blocking(self.stdout.fileno(), False)
+
+            while keep_going:
+                s_out = select.select([self.stdout, self.stderr], [], [], 1)
+                r, _, _ = s_out
+
+                # We consume the output one more time after it's done.
+                # This prevents us from missing the last bytes.
+                keep_going = continue_running()
+
+                if self.stdout is not None and self.stdout in r:
+                    data = self.stdout.read(512)
+                    data = data.decode("utf-8")
+                    output += data
+                    if stdout:
+                        stdout.write(data)
+                        stdout.flush()
+
+                if self.stderr is not None and self.stderr in r:
+                    data = self.stderr.read(512)
+                    data = data.decode("utf-8")
+                    output += data
+                    if stderr:
+                        stderr.write(data)
+                        stderr.flush()
+
+        except KeyboardInterrupt:
+            if keyboard_int is not None:
+                keyboard_int()
+            raise
+
+        finally:
+            os.set_blocking(self.stdout.fileno(), original_proc_blocking)
+
+        return output
+
+    def recv_exit_status(self) -> int:
+        self.proc_.communicate()
+        return self.proc_.returncode
+
+    def fileno(self) -> int:
+        return self.stdout.fileno()
 
     def run_console_commands(
         self,
@@ -121,13 +205,137 @@ class RemoteCommand:
 
         return output
 
+    def posix_shell(self) -> None:
+        oldtty = termios.tcgetattr(sys.stdin)
+        stdin_blocking = os.get_blocking(sys.stdin.fileno())
+        try:
+            tty.setcbreak(sys.stdin.fileno())
+            os.set_blocking(sys.stdin.fileno(), False)
+
+            self.send("\n")
+            print("\n")
+
+            while True:
+                r, _, _ = select.select(
+                    [self.stdout, self.stderr, sys.stdin], [], []
+                )
+                if self.stdout in r:
+                    try:
+                        data = self.recv(512)
+                        if len(data) == 0:
+                            break
+
+                        sys.stdout.write(data)
+                        sys.stdout.flush()
+
+                    except socket.timeout:
+                        pass
+
+                if self.stderr in r:
+                    try:
+                        data = self.recv_stderr(512)
+                        sys.stderr.write(data)
+                        sys.stderr.flush()
+
+                    except socket.timeout:
+                        pass
+
+                if sys.stdin in r:
+                    x = sys.stdin.read(512)
+                    if len(x) == 0:
+                        break
+
+                    if x.isprintable() or x in ["\r", "\n", "\t", "\x7f"]:
+                        # If backspace, delete the last character
+                        if x == "\x7f":
+                            sys.stdout.write("\b \b")
+                        else:
+                            sys.stdout.write(x)
+                        sys.stdout.flush()
+                        self.send(x)
+
+        finally:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, oldtty)
+            os.set_blocking(sys.stdin.fileno(), stdin_blocking)
+
+    @property
+    def stdin(self):
+        assert self.proc_.stdin is not None
+        return self.proc_.stdin
+
+    @property
+    def stdout(self):
+        assert self.proc_.stdout is not None
+        return self.proc_.stdout
+
+    @property
+    def stderr(self):
+        assert self.proc_.stderr is not None
+        return self.proc_.stderr
+
+
+class RemoteCommand:
+    def __init__(
+        self, ssh_client: paramiko.SSHClient, *args, **kwargs
+    ) -> None:
+        self.ssh_client = ssh_client
+        self.cmd_ = remote_command(ssh_client, *args, **kwargs)
+
+    def send(self, data) -> None:
+        self.cmd_.send(data)
+
+    def recv(self, size) -> str:
+        data = self.cmd_.recv(size)
+        return data.decode("utf-8")
+
+    def watch(self, *args, **kwargs) -> str:
+        return watch_command(self.cmd_, *args, **kwargs)
+
+    def recv_exit_status(self) -> int:
+        return self.cmd_.recv_exit_status()
+
+    def fileno(self) -> int:
+        return self.cmd_.fileno()
+
+    def run_console_commands(
+        self,
+        commands: Union[str, list[str]],
+        timeout: float = 1.0,
+        console_pattern: Optional[str] = None,
+        log_file: Union[bool, TextIO] = False,
+    ) -> str:
+        if not isinstance(commands, list):
+            commands = [commands]
+
+        if console_pattern is not None:
+            console_pattern_len = len(console_pattern)
+        else:
+            console_pattern_len = None
+
+        output = ""
+        for cmd in commands:
+            self.send(cmd + "\n")
+            output += self.watch(
+                keyboard_int=lambda: self.send("\x03"),
+                timeout=timeout,
+                stop_pattern=console_pattern,
+                max_match_length=console_pattern_len,
+                stdout=log_file,
+                stderr=log_file,
+            )
+
+        return output
+
+    def posix_shell(self) -> None:
+        posix_shell(self)
+
+    def __del__(self):
+        self.cmd_.close()
+
 
 class LocalHost:
-    def __init__(self):
-        pass
-
     def run_command(self, *args, **kwargs) -> LocalCommand:
-        return LocalCommand()
+        return LocalCommand(*args, **kwargs)
 
 
 class RemoteHost:
@@ -158,19 +366,6 @@ class RemoteHost:
 
     def run_command(self, *args, **kwargs) -> RemoteCommand:
         return RemoteCommand(self.ssh_client, *args, **kwargs)
-
-
-class LocalClient:
-    """A client that runs commands locally."""
-
-    def __init__(self):
-        pass
-
-    def get_transport(self):
-        return None
-
-    def close(self):
-        pass
 
 
 def remote_command(
@@ -223,18 +418,22 @@ def remove_remote_file(host, remote_path):
 
 def watch_command(
     command,
-    stop_condition=None,
-    keyboard_int=None,
-    timeout=None,
+    stop_condition: Optional[Callable[[], bool]] = None,
+    keyboard_int: Optional[Callable[[], None]] = None,
+    timeout: Optional[float] = None,
     stdout: Union[bool, TextIO] = True,
     stderr: Union[bool, TextIO] = True,
-    stop_pattern=None,
+    stop_pattern: Optional[str] = None,
     max_match_length: Optional[int] = None,
 ) -> str:
     if stop_condition is None:
         stop_condition = command.exit_status_ready
 
-    if timeout is not None:
+    assert stop_condition is not None
+
+    if timeout is None:
+        deadline = None
+    else:
         deadline = time.time() + timeout
 
     if stdout is True:
@@ -249,23 +448,24 @@ def watch_command(
     output = ""
 
     def continue_running():
+        if (deadline is not None) and (time.time() > deadline):
+            return False
+
         if stop_pattern is not None:
             search_len = min(len(output), max_match_length)
             if re.search(stop_pattern, output[-search_len:]):
                 return False
+
         return not stop_condition()
 
-    stop = False
+    keep_going = True
     try:
-        while not stop:
+        while keep_going:
             time.sleep(0.01)
 
             # We consume the output one more time after it's done.
             # This prevents us from missing the last bytes.
-            if (timeout is not None) and (time.time() > deadline):
-                stop = True
-            elif not continue_running():
-                stop = True
+            keep_going = continue_running()
 
             if command.recv_ready():
                 data = command.recv(512)
@@ -376,7 +576,6 @@ def posix_shell(chan):
     try:
         tty.setraw(sys.stdin.fileno())
         tty.setcbreak(sys.stdin.fileno())
-        chan.settimeout(0.0)
 
         chan.send("\n")
 
@@ -385,10 +584,9 @@ def posix_shell(chan):
             if chan in r:
                 try:
                     data = chan.recv(512)
-                    decoded_data = data.decode("utf-8")
-                    if len(decoded_data) == 0:
+                    if len(data) == 0:
                         break
-                    sys.stdout.write(decoded_data)
+                    sys.stdout.write(data)
                     sys.stdout.flush()
                 except socket.timeout:
                     pass
@@ -405,13 +603,13 @@ def posix_shell(chan):
         termios.tcsetattr(sys.stdin, termios.TCSADRAIN, oldtty)
 
 
-class RemoteIntelFpga:
+class IntelFpga:
     def __init__(
         self,
-        host_name: Optional[str],
         fpga_id: str,
         run_console_cmd: str,
         load_bitstream_cmd: str,
+        host_name: Optional[str] = None,
         load_bitstream: bool = True,
         log_file: Union[bool, TextIO] = False,
     ):
@@ -420,7 +618,6 @@ class RemoteIntelFpga:
 
         self.host_name = host_name
         self.fpga_id = fpga_id
-        # self._ssh_client = None
         self._host = None
         self.jtag_console = None
         self.run_console_cmd = run_console_cmd
@@ -509,7 +706,7 @@ class RemoteIntelFpga:
 
             if "Synchronization failed" in output:
                 raise RuntimeError(
-                    "Synchronization failed, try power cycling " "the host"
+                    "Synchronization failed, try power cycling the host"
                 )
 
             warnings.warn("Failed to load bitstream, retrying.")
@@ -521,7 +718,8 @@ class RemoteIntelFpga:
         self.launch_console()
 
     def interactive_shell(self):
-        posix_shell(self.jtag_console.pipe)
+        assert self.jtag_console is not None
+        self.jtag_console.posix_shell()
 
     @property
     def host(self):
@@ -541,7 +739,8 @@ class RemoteIntelFpga:
 
     def __del__(self):
         if self.jtag_console is not None:
-            self.jtag_console.close()
+            del self.jtag_console
+            self.jtag_console = None
         del self.host
 
 

@@ -1,5 +1,5 @@
 from netexp.helpers import (
-    RemoteIntelFpga,
+    IntelFpga,
     remote_command,
     upload_file,
     watch_command,
@@ -34,11 +34,11 @@ class FpgaPktgen(Pktgen):
         load_bitstream_cmd = f"{remote_dir}/{LOAD_BITSTREAM_CMD}"
         run_console_cmd = f"{remote_dir}/{RUN_CONSOLE_CMD}"
 
-        self.fpga = RemoteIntelFpga(
-            server,
+        self.fpga = IntelFpga(
             fpga_id,
             run_console_cmd,
             load_bitstream_cmd,
+            host_name=server,
             load_bitstream=load_bitstream,
         )
 
