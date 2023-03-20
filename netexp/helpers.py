@@ -34,7 +34,7 @@ class LocalCommand:
         pty: bool = False,
         dir: Optional[str] = None,
         source_bashrc: bool = False,
-        print_command: bool = False,
+        print_command: Union[bool, TextIO] = True,
     ) -> None:
         if dir is not None:
             command = f"cd {dir}; {command}"
@@ -48,11 +48,13 @@ class LocalCommand:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             shell=True,
-            # text=True,
         )
 
+        if print_command is True:
+            print_command = sys.stdout
+
         if print_command:
-            print(f"command: {command}")
+            print_command.write(f"command: {command}")
 
     def send(self, data: Union[str, bytes]) -> None:
         if isinstance(data, str):
@@ -374,7 +376,7 @@ def remote_command(
     pty: bool = False,
     dir: Optional[str] = None,
     source_bashrc: bool = False,
-    print_command: bool = False,
+    print_command: Union[bool, TextIO] = True,
 ) -> paramiko.Channel:
     transport = client.get_transport()
 
@@ -395,8 +397,11 @@ def remote_command(
 
     session.exec_command(command)
 
+    if print_command is True:
+        print_command = sys.stdout
+
     if print_command:
-        print(f"command: {command}")
+        print_command.write(f"command: {command}")
 
     return session
 
