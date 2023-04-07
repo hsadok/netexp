@@ -1,4 +1,7 @@
 from netexp.pktgen import Pktgen
+from typing import TextIO, Union
+
+import sys
 
 
 def zero_loss_throughput(
@@ -7,6 +10,7 @@ def zero_loss_throughput(
     max_throughput: int = 100_000_000_000,
     precision: int = 1_000_000_000,
     target_duration: int = 5,
+    log_file: Union[bool, TextIO] = False,
 ) -> int:
     """Find zero-loss throughput using a binary search.
 
@@ -28,6 +32,8 @@ def zero_loss_throughput(
     Returns:
         The zero loss throughput found (in bps).
     """
+    if log_file is True:
+        log_file = sys.stdout
 
     def get_nb_pkts_for_throughput(throughput):
         pps = throughput / ((mean_pkt_size + 20) * 8)
@@ -44,7 +50,9 @@ def zero_loss_throughput(
     while (tpt_upper - tpt_lower) > precision:
         nb_pkts = get_nb_pkts_for_throughput(current_throughput)
 
-        print(f"Trying {current_throughput // 1e6} Mbps with {nb_pkts} pkts.")
+        if log_file:
+            tpt_mbps = current_throughput // 1e6
+            log_file.write(f"Trying {tpt_mbps} Mbps with {nb_pkts} pkts.\n")
 
         pktgen.clean_stats()
         pktgen.start(current_throughput, nb_pkts)
