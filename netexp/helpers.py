@@ -724,6 +724,11 @@ class IntelFpga:
                     "Synchronization failed, try power cycling the host"
                 )
 
+            if "Error (210007)" in output:
+                raise RuntimeError(
+                    "Failed to load bitstream, did you set the bitstream file?"
+                )
+
             warnings.warn("Failed to load bitstream, retrying.")
 
             retries += 1
