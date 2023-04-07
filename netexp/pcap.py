@@ -1,16 +1,17 @@
-from netexp.helpers import remote_command, watch_command
+from netexp.helpers import LocalHost, RemoteHost
+
+from typing import Union
 
 
 # TODO(sadok): Provide this as a method for pktgen. This can allow it to
 # flexibly get the packet size if a pcap is loaded.
-def mean_pkt_size_remote_pcap(ssh_client, pcap_path) -> float:
-    capinfos_cmd = remote_command(
-        ssh_client, f"capinfos -z {pcap_path}", pty=True
-    )
-    output = watch_command(
-        capinfos_cmd, keyboard_int=lambda: capinfos_cmd.send("\x03")
-    )
+def mean_pkt_size_pcap(
+    host: Union[LocalHost, RemoteHost], pcap_path: str
+) -> float:
+    capinfos_cmd = host.run_command(f"capinfos -z {pcap_path}", pty=True)
+    output = capinfos_cmd.watch(keyboard_int=lambda: capinfos_cmd.send("\x03"))
     status = capinfos_cmd.recv_exit_status()
+
     if status != 0:
         raise RuntimeError("Error processing remote pcap")
 

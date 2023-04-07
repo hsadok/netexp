@@ -34,7 +34,7 @@ class LocalCommand:
         pty: bool = False,
         dir: Optional[str] = None,
         source_bashrc: bool = False,
-        print_command: Union[bool, TextIO] = True,
+        print_command: Union[bool, TextIO] = False,
     ) -> None:
         if dir is not None:
             command = f"cd {dir}; {command}"
@@ -54,7 +54,7 @@ class LocalCommand:
             print_command = sys.stdout
 
         if print_command:
-            print_command.write(f"command: {command}")
+            print_command.write(f"command: {command}\n")
 
     def send(self, data: Union[str, bytes]) -> None:
         if isinstance(data, str):
@@ -87,21 +87,21 @@ class LocalCommand:
 
         return data.decode("utf-8")
 
+    def exit_status_ready(self) -> bool:
+        return self.proc_.poll() is not None
+
     def watch(
         self,
         stop_condition: Optional[Callable[[], bool]] = None,
         keyboard_int: Optional[Callable[[], None]] = None,
         timeout: Optional[float] = None,
-        stdout: Union[bool, TextIO] = True,
-        stderr: Union[bool, TextIO] = True,
+        stdout: Union[bool, TextIO] = False,
+        stderr: Union[bool, TextIO] = False,
         stop_pattern: Optional[str] = None,
         max_match_length: Optional[int] = None,
     ) -> str:
-        def exit_status_ready() -> bool:
-            return self.proc_.poll() is not None
-
         if stop_condition is None:
-            stop_condition = exit_status_ready
+            stop_condition = self.exit_status_ready
 
         if timeout is None:
             deadline = None
@@ -290,6 +290,9 @@ class RemoteCommand:
         data = self.cmd_.recv(size)
         return data.decode("utf-8")
 
+    def exit_status_ready(self) -> bool:
+        return self.cmd_.exit_status_ready()
+
     def watch(self, *args, **kwargs) -> str:
         return watch_command(self.cmd_, *args, **kwargs)
 
@@ -370,13 +373,20 @@ class RemoteHost:
         return RemoteCommand(self.ssh_client, *args, **kwargs)
 
 
+def get_host_from_hostname(hostname: str) -> Union[LocalHost, RemoteHost]:
+    if hostname == "localhost":
+        return LocalHost()
+    else:
+        return RemoteHost(hostname)
+
+
 def remote_command(
     client: paramiko.SSHClient,
     command: str,
     pty: bool = False,
     dir: Optional[str] = None,
     source_bashrc: bool = False,
-    print_command: Union[bool, TextIO] = True,
+    print_command: Union[bool, TextIO] = False,
 ) -> paramiko.Channel:
     transport = client.get_transport()
 
@@ -401,22 +411,22 @@ def remote_command(
         print_command = sys.stdout
 
     if print_command:
-        print_command.write(f"command: {command}")
+        print_command.write(f"command: {command}\n")
 
     return session
 
 
-def upload_file(host, local_path, remote_path):
+def upload_file(host: str, local_path: str, remote_path: str):
     cp = subprocess.run(["scp", "-r", local_path, f"{host}:{remote_path}"])
     cp.check_returncode()
 
 
-def download_file(host, remote_path, local_path):
+def download_file(host: str, remote_path: str, local_path: str):
     cp = subprocess.run(["scp", "-r", f"{host}:{remote_path}", local_path])
     cp.check_returncode()
 
 
-def remove_remote_file(host, remote_path):
+def remove_remote_file(host: str, remote_path: str):
     cp = subprocess.run(["ssh", host, "rm", remote_path])
     cp.check_returncode()
 
@@ -426,8 +436,8 @@ def watch_command(
     stop_condition: Optional[Callable[[], bool]] = None,
     keyboard_int: Optional[Callable[[], None]] = None,
     timeout: Optional[float] = None,
-    stdout: Union[bool, TextIO] = True,
-    stderr: Union[bool, TextIO] = True,
+    stdout: Union[bool, TextIO] = False,
+    stderr: Union[bool, TextIO] = False,
     stop_pattern: Optional[str] = None,
     max_match_length: Optional[int] = None,
 ) -> str:
@@ -618,8 +628,8 @@ class IntelFpga:
         load_bitstream: bool = True,
         log_file: Union[bool, TextIO] = False,
     ):
-        if host_name in ["localhost", "127.0.0.1"]:
-            host_name = None
+        if host_name is None:
+            host_name = "localhost"
 
         self.host_name = host_name
         self.fpga_id = fpga_id
@@ -729,10 +739,7 @@ class IntelFpga:
     @property
     def host(self):
         if self._host is None:
-            if self.host_name is None:
-                self._host = LocalHost()
-            else:
-                self._host = RemoteHost(self.host_name)
+            self._host = get_host_from_hostname(self.host_name)
         return self._host
 
     @host.deleter
@@ -750,15 +757,17 @@ class IntelFpga:
 
 
 def get_host_available_frequencies(
-    ssh_client: paramiko.SSHClient, core: int
+    host: Union[LocalHost, RemoteHost],
+    core: int,
+    stdout: Union[bool, TextIO] = False,
+    stderr: Union[bool, TextIO] = False,
 ) -> list[int]:
-    cmd = remote_command(
-        ssh_client,
+    cmd = host.run_command(
         f"sudo cat /sys/devices/system/cpu/cpu{core}/cpufreq/"
         f"scaling_available_frequencies",
         pty=True,
     )
-    out = watch_command(cmd, stdout=True, stderr=True)
+    out = cmd.watch(stdout=stdout, stderr=stderr)
     status = cmd.recv_exit_status()
     if status != 0:
         raise RuntimeError("Could not probe available frequencies")
@@ -775,13 +784,13 @@ def get_host_available_frequencies(
     return frequencies
 
 
-def set_remote_host_clock(
-    ssh_client: paramiko.SSHClient, clock: int, cores: list[int]
+def set_host_clock(
+    host: Union[LocalHost, RemoteHost], clock: int, cores: list[int]
 ) -> None:
     """Set clock frequency for a remote host.
 
     Args:
-        ssh_client: SSH connection to the remote host.
+        host: Host to set the clock frequency for.
         clock: CPU frequency to be set (in kHz). If `0` set frequency to
           maximum supported by the core.
         cores: List of cores to set the frequency to.
@@ -789,19 +798,19 @@ def set_remote_host_clock(
     # Arch has good docs about this:
     #   https://wiki.archlinux.org/title/CPU_frequency_scaling
     def raw_set_core_freq(freq_type: str, core: int, freq: int):
-        cmd = remote_command(
-            ssh_client,
+        cmd = host.run_command(
             f"echo {freq} | sudo tee /sys/devices/system/cpu/cpu{core}/"
             f"cpufreq/scaling_{freq_type}_freq",
             pty=True,
         )
-        watch_command(cmd, stdout=False, stderr=False)
+        cmd.watch(stdout=False, stderr=False)
         status = cmd.recv_exit_status()
+
         if status != 0:
             raise RuntimeError(f"Could not set {freq_type} frequency")
 
     for core in cores:
-        available_freqs = get_host_available_frequencies(ssh_client, core)
+        available_freqs = get_host_available_frequencies(host, core)
 
         if clock == 0:
             clock = available_freqs[0]  # Set clock to maximum.
@@ -809,14 +818,14 @@ def set_remote_host_clock(
         if clock not in available_freqs:
             raise RuntimeError(f'Clock "{clock}" not supported by CPU.')
 
-        cmd = remote_command(
-            ssh_client,
+        cmd = host.run_command(
             f"sudo cat /sys/devices/system/cpu/cpu{core}/cpufreq/"
             f"cpuinfo_cur_freq",
             pty=True,
         )
-        out = watch_command(cmd, stdout=False, stderr=False)
+        out = cmd.watch(stdout=False, stderr=False)
         status = cmd.recv_exit_status()
+
         if status != 0:
             raise RuntimeError("Could not retrieve current frequency")
 
