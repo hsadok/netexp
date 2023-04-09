@@ -728,7 +728,8 @@ class IntelFpga:
             retries += 1
             if retries >= max_retries:
                 raise RuntimeError(
-                    f"Failed to determine device {retries} times"
+                    f"Failed to determine device ({self.fpga_id}) {retries} "
+                    "times"
                 )
 
             time.sleep(1)
