@@ -416,18 +416,57 @@ def remote_command(
     return session
 
 
-def upload_file(host: str, local_path: str, remote_path: str):
-    cp = subprocess.run(["scp", "-r", local_path, f"{host}:{remote_path}"])
+def upload_file(
+    host: str,
+    local_path: str,
+    remote_path: str,
+    log_file: Optional[Union[bool, TextIO]] = False,
+):
+    if log_file is True:
+        log_file = sys.stdout
+    elif log_file is False:
+        log_file = None
+
+    cp = subprocess.run(
+        ["scp", "-r", local_path, f"{host}:{remote_path}"],
+        stdout=log_file,
+        stderr=log_file,
+    )
     cp.check_returncode()
 
 
-def download_file(host: str, remote_path: str, local_path: str):
-    cp = subprocess.run(["scp", "-r", f"{host}:{remote_path}", local_path])
+def download_file(
+    host: str,
+    remote_path: str,
+    local_path: str,
+    log_file: Optional[Union[bool, TextIO]] = False,
+):
+    if log_file is True:
+        log_file = sys.stdout
+    elif log_file is False:
+        log_file = None
+
+    cp = subprocess.run(
+        ["scp", "-r", f"{host}:{remote_path}", local_path],
+        stdout=log_file,
+        stderr=log_file,
+    )
     cp.check_returncode()
 
 
-def remove_remote_file(host: str, remote_path: str):
-    cp = subprocess.run(["ssh", host, "rm", remote_path])
+def remove_remote_file(
+    host: str,
+    remote_path: str,
+    log_file: Optional[Union[bool, TextIO]] = False,
+):
+    if log_file is True:
+        log_file = sys.stdout
+    elif log_file is False:
+        log_file = None
+
+    cp = subprocess.run(
+        ["ssh", host, "rm", remote_path], stdout=log_file, stderr=log_file
+    )
     cp.check_returncode()
 
 
