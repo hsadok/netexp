@@ -817,7 +817,6 @@ def get_host_available_frequencies(
     if status != 0:
         raise RuntimeError("Could not probe available frequencies")
 
-    print(out)
     frequencies = []
     for f in out.split(" "):
         try:
