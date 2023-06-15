@@ -1,7 +1,7 @@
 import ipaddress
 import time
 
-from typing import Any, Optional, Iterable, Union
+from typing import Any, Optional, Iterable, TextIO, Union
 
 from netexp.pktgen import Pktgen
 from netexp.helpers import (
@@ -184,11 +184,12 @@ class DpdkPktgen(Pktgen):
         port: Default port to use, only relevant with multiple interfaces.
         pcap: Path to pcap file.
         config_file: DPDK Pktgen configuration file.
-        log_file: Log file.
+        log_file_name: Log file name to pass to DPDK Pktgen.
         promiscuous: Enable promiscuous mode (accept all packets that arrive at
           the interface).
         numa_support: Enable NUMA support.
         extra_opt: Extra DPDK pktgen command-line options.
+        log_file: File to log the execution output.
     """
 
     def __init__(
@@ -201,10 +202,11 @@ class DpdkPktgen(Pktgen):
         tx_port: int = 0,
         pcap: Optional[str] = None,
         config_file: Optional[str] = None,
-        log_file: Optional[str] = None,
+        log_file_name: Optional[str] = None,
         promiscuous: bool = False,
         numa_support: bool = False,
         extra_opt: Optional[str] = None,
+        log_file: Union[bool, TextIO] = False,
     ) -> None:
         self.pktgen_ssh_client = get_ssh_client(pktgen_server)
         pktgen_options = f'-m "{port_map}"'
@@ -221,8 +223,8 @@ class DpdkPktgen(Pktgen):
         if config_file is not None:
             pktgen_options += f" -f {config_file}"
 
-        if log_file is not None:
-            pktgen_options += f" -l {log_file}"
+        if log_file_name is not None:
+            pktgen_options += f" -l {log_file_name}"
 
         if promiscuous:
             pktgen_options += " -P"
@@ -233,22 +235,27 @@ class DpdkPktgen(Pktgen):
         if extra_opt is not None:
             pktgen_options += extra_opt
 
+        self.log_file = log_file
+
         remote_cmd = f"sudo pktgen {dpdk_config} -- {pktgen_options}"
         self.pktgen = remote_command(
-            self.pktgen_ssh_client, remote_cmd, pty=True, print_command=True
+            self.pktgen_ssh_client,
+            remote_cmd,
+            pty=True,
+            print_command=self.log_file,
         )
         self.remote_cmd = remote_cmd
         self.target_pkt_tx = 0
 
         self.ready = False
 
-    def wait_ready(self, stdout: bool = True, stderr: bool = True) -> None:
+    def wait_ready(self) -> None:
         watch_command(
             self.pktgen,
             keyboard_int=self.pktgen.close,
             stop_pattern="Pktgen:/>",
-            stdout=stdout,
-            stderr=stderr,
+            stdout=self.log_file,
+            stderr=self.log_file,
         )
         self.ready = True
 
@@ -258,6 +265,7 @@ class DpdkPktgen(Pktgen):
             cmds,
             timeout=timeout,
             console_pattern="\r\nPktgen:/> ",
+            log_file=self.log_file,
         )
 
     def set_params(
@@ -277,7 +285,7 @@ class DpdkPktgen(Pktgen):
             tx_port = self.tx_port
 
         if not self.ready:
-            self.wait_ready(stdout=False, stderr=False)
+            self.wait_ready()
 
         commands = [
             f"range {tx_port} dst port start {init_port}",
@@ -295,7 +303,7 @@ class DpdkPktgen(Pktgen):
         tx_port = tx_port or self.tx_port
 
         if not self.ready:
-            self.wait_ready(stdout=False, stderr=False)
+            self.wait_ready()
 
         commands = []
         if self.use_pcap:
@@ -347,6 +355,8 @@ class DpdkPktgen(Pktgen):
             self.pktgen,
             keyboard_int=lambda: self.pktgen.send("\x03"),
             stop_pattern="\r\n\\d+\r\n",
+            stdout=self.log_file,
+            stderr=self.log_file,
         )
         lines = output.split("\r\n")
         lines = [ln for ln in lines if ln.isdigit()]
