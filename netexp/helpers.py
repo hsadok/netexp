@@ -761,12 +761,18 @@ class IntelFpga:
 
             if "Synchronization failed" in output:
                 raise RuntimeError(
-                    "Synchronization failed, try power cycling the host"
+                    "Synchronization failed. Try power cycling the host"
                 )
 
             if "Error (210007)" in output:
                 raise RuntimeError(
-                    "Failed to load bitstream, did you set the bitstream file?"
+                    "Failed to load bitstream. Did you set the bitstream file?"
+                )
+
+            if "Error (18939)" in output:
+                raise RuntimeError(
+                    "Failed to load bitstream. Is another process using the "
+                    "FPGA?"
                 )
 
             warnings.warn("Failed to load bitstream, retrying.")
