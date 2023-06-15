@@ -1,4 +1,5 @@
 from abc import ABCMeta, abstractmethod
+from typing import TextIO, Union
 
 
 class Pktgen(metaclass=ABCMeta):
@@ -40,4 +41,14 @@ class Pktgen(metaclass=ABCMeta):
 
     @abstractmethod
     def get_tx_throughput(self) -> int:
+        pass
+
+    @property
+    @abstractmethod
+    def log_file(self) -> Union[bool, TextIO]:
+        pass
+
+    @log_file.setter
+    @abstractmethod
+    def log_file(self, value: Union[bool, TextIO]) -> None:
         pass
