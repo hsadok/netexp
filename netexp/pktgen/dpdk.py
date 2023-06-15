@@ -197,7 +197,8 @@ class DpdkPktgen(Pktgen):
         dpdk_config: Union[str, DpdkConfig],
         port_map: str,
         max_throughput: float,
-        port: int = 0,
+        rx_port: int = 0,
+        tx_port: int = 0,
         pcap: Optional[str] = None,
         config_file: Optional[str] = None,
         log_file: Optional[str] = None,
@@ -208,7 +209,8 @@ class DpdkPktgen(Pktgen):
         self.pktgen_ssh_client = get_ssh_client(pktgen_server)
         pktgen_options = f'-m "{port_map}"'
         self.max_throughput = max_throughput
-        self.port = port
+        self.rx_port = rx_port
+        self.tx_port = tx_port
 
         if pcap is not None:
             pktgen_options += f" -s 0:{pcap}"
@@ -265,48 +267,48 @@ class DpdkPktgen(Pktgen):
         nb_dst: int,
         init_ip: Any = None,
         init_port: int = 0,
-        port: Optional[int] = None,
+        tx_port: Optional[int] = None,
     ) -> None:
         init_ip = init_ip or "192.168.0.0"
         max_src_ip = ipaddress.ip_address(init_ip) + nb_src - 1
         max_dst_ip = ipaddress.ip_address(init_ip) + nb_dst - 1
 
-        if port is None:
-            port = self.port
+        if tx_port is None:
+            tx_port = self.tx_port
 
         if not self.ready:
             self.wait_ready(stdout=False, stderr=False)
 
         commands = [
-            f"range {port} dst port start {init_port}",
-            f"range {port} src ip max {max_src_ip}",
-            f"range {port} dst ip max {max_dst_ip}",
-            f"range {port} size start {pkt_size}",
-            f"range {port} size min {pkt_size}",
-            f"range {port} size max {pkt_size}",
+            f"range {tx_port} dst port start {init_port}",
+            f"range {tx_port} src ip max {max_src_ip}",
+            f"range {tx_port} dst ip max {max_dst_ip}",
+            f"range {tx_port} size start {pkt_size}",
+            f"range {tx_port} size min {pkt_size}",
+            f"range {tx_port} size max {pkt_size}",
         ]
         self.commands(commands)
 
     def start(
-        self, throughput: float, nb_pkts: int, port: Optional[int] = None
+        self, throughput: float, nb_pkts: int, tx_port: Optional[int] = None
     ) -> None:
-        port = port or self.port
+        tx_port = tx_port or self.tx_port
 
         if not self.ready:
             self.wait_ready(stdout=False, stderr=False)
 
         commands = []
         if self.use_pcap:
-            commands += [f"enable {port} pcap"]
+            commands += [f"enable {tx_port} pcap"]
 
         rate = throughput / self.max_throughput * 100
 
         self.target_pkt_tx = self.get_nb_tx_pkts() + nb_pkts
 
         commands += [
-            f"set {port} count {nb_pkts}",
-            f"set {port} rate {rate}",
-            f"start {port}",
+            f"set {tx_port} count {nb_pkts}",
+            f"set {tx_port} rate {rate}",
+            f"start {tx_port}",
         ]
         self.commands(commands)
 
@@ -321,8 +323,8 @@ class DpdkPktgen(Pktgen):
             if old_pkt_tx == pkts_tx:
                 raise RuntimeError("Pktgen is not making progress")
 
-    def stop(self, port: Optional[int] = None) -> None:
-        self.commands(f"stop {port or self.port}")
+    def stop(self, tx_port: Optional[int] = None) -> None:
+        self.commands(f"stop {tx_port or self.tx_port}")
 
     def clear(self) -> None:
         self.pktgen.send("clr\n")
@@ -352,28 +354,28 @@ class DpdkPktgen(Pktgen):
         return int(lines[-1])
 
     def get_pkts_rx_rate(self, port: Optional[int] = None) -> int:
-        return self._get_stats("rate", "pkts_rx", port or self.port)
+        return self._get_stats("rate", "pkts_rx", port or self.rx_port)
 
     def get_pkts_tx_rate(self, port: Optional[int] = None) -> int:
-        return self._get_stats("rate", "pkts_tx", port or self.port)
+        return self._get_stats("rate", "pkts_tx", port or self.tx_port)
 
     def get_mbits_rx(self, port: Optional[int] = None) -> int:
-        return self._get_stats("rate", "mbits_rx", port or self.port)
+        return self._get_stats("rate", "mbits_rx", port or self.rx_port)
 
     def get_mbits_tx(self, port: Optional[int] = None) -> int:
-        return self._get_stats("rate", "mbits_rx", port or self.port)
+        return self._get_stats("rate", "mbits_rx", port or self.tx_port)
 
     def get_nb_rx_pkts(self, port: Optional[int] = None) -> int:
-        return self._get_stats("port", "ipackets", port or self.port)
+        return self._get_stats("port", "ipackets", port or self.rx_port)
 
     def get_nb_tx_pkts(self, port: Optional[int] = None) -> int:
-        return self._get_stats("port", "opackets", port or self.port)
+        return self._get_stats("port", "opackets", port or self.tx_port)
 
     def get_rx_throughput(self, port: Optional[int] = None) -> int:
-        return self.get_mbits_rx(self.port) * 1_000_000
+        return self.get_mbits_rx(self.rx_port) * 1_000_000
 
     def get_tx_throughput(self, port: Optional[int] = None) -> int:
-        return self.get_mbits_tx(self.port) * 1_000_000
+        return self.get_mbits_tx(self.tx_port) * 1_000_000
 
     def enter_interactive(self) -> None:
         posix_shell(self.pktgen)
