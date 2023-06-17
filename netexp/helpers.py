@@ -103,6 +103,12 @@ class LocalCommand:
         if stop_condition is None:
             stop_condition = self.exit_status_ready
 
+        def send_ctrl_c():
+            self.send("\x03")
+
+        if keyboard_int is None:
+            keyboard_int = send_ctrl_c
+
         if timeout is None:
             deadline = None
         else:
@@ -162,8 +168,7 @@ class LocalCommand:
                         stderr.flush()
 
         except KeyboardInterrupt:
-            if keyboard_int is not None:
-                keyboard_int()
+            keyboard_int()
             raise
 
         finally:
@@ -293,8 +298,32 @@ class RemoteCommand:
     def exit_status_ready(self) -> bool:
         return self.cmd_.exit_status_ready()
 
-    def watch(self, *args, **kwargs) -> str:
-        return watch_command(self.cmd_, *args, **kwargs)
+    def watch(
+        self,
+        stop_condition: Optional[Callable[[], bool]] = None,
+        keyboard_int: Optional[Callable[[], None]] = None,
+        timeout: Optional[float] = None,
+        stdout: Union[bool, TextIO] = False,
+        stderr: Union[bool, TextIO] = False,
+        stop_pattern: Optional[str] = None,
+        max_match_length: Optional[int] = None,
+    ) -> str:
+        def send_ctrl_c() -> None:
+            self.send("\x03")
+
+        if keyboard_int is None:
+            keyboard_int = send_ctrl_c
+
+        return watch_command(
+            self.cmd_,
+            stop_condition=stop_condition,
+            keyboard_int=keyboard_int,
+            timeout=timeout,
+            stdout=stdout,
+            stderr=stderr,
+            stop_pattern=stop_pattern,
+            max_match_length=max_match_length,
+        )
 
     def recv_exit_status(self) -> int:
         return self.cmd_.recv_exit_status()
@@ -845,6 +874,7 @@ def set_host_clock(
           maximum supported by the core.
         cores: List of cores to set the frequency to.
     """
+
     # Arch has good docs about this:
     #   https://wiki.archlinux.org/title/CPU_frequency_scaling
     def raw_set_core_freq(freq_type: str, core: int, freq: int):
